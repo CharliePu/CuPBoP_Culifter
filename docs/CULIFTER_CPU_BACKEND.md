@@ -6,7 +6,7 @@ This fork adds a CPU path for CuLifter-generated LLVM IR while retaining the ups
 
 Use Linux or WSL, Python 3, and LLVM/Clang 18 development tools. Put `clang++-18`, `clang-18`, `llvm-config-18`, `opt-18` and `llvm-nm-18` on `PATH`. The build uses C++17; `CXX` and `LLVM_CONFIG` can override its compiler and LLVM configuration tool. Pipeline verification/object generation still invokes the versioned tools above.
 
-Keep the [CuLifter fork](https://github.com/CharliePu/CuLifter_multibackends) and [this fork](https://github.com/CharliePu/CuPBoP_Culifter) in sibling directories named `CuLifter` and `CuPBoP`:
+Keep the [CuLifter repository](https://github.com/CharliePu/CuLifter-multibackends) and [this fork](https://github.com/CharliePu/CuPBoP_Culifter) in sibling directories named `CuLifter` and `CuPBoP`:
 
 ```text
 workspace/
