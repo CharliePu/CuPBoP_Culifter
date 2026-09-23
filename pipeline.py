@@ -41,7 +41,7 @@ def command(args,timeout=180):
     p=subprocess.run(list(map(str,args)),text=True,capture_output=True,timeout=timeout)
     if p.returncode:raise RuntimeError((p.stderr[:4000]+'\n...\n'+p.stderr[-2000:]) if p.stderr else p.stdout[-6000:] or f'command exited {p.returncode}')
     return p
-def compile_kernel(source,kernel,output,block_size=32,target='x86_64-linux-gnu',rename=None,obj=None,shared_memory_bytes=32768):
+def compile_kernel(source,kernel,output,block_size=32,target='x86_64-linux-gnu',rename=None,obj=None,shared_memory_bytes=32768,ssa_regions=True,scalar_math=True):
     source=Path(source).resolve();output=Path(output).resolve()
     if source==output:raise ValueError('Input IR must remain unchanged')
     if target not in ['x86_64-linux-gnu','aarch64-linux-gnu']:raise ValueError('Unsupported CPU target')
@@ -54,7 +54,8 @@ def compile_kernel(source,kernel,output,block_size=32,target='x86_64-linux-gnu',
         binary_identity=sha(HERE/'build/cpu-coarsen')
         with tempfile.TemporaryDirectory(prefix='.coarsen-',dir=output.parent) as temp:
             temp=Path(temp);transformed=temp/'kernel.ll'
-            args=[HERE/'build/cpu-coarsen',source,'--kernel',kernel,'--block-size',block_size,'--shared-memory-bytes',shared_memory_bytes,'--target',target,'-o',transformed]
+            args=[HERE/'build/cpu-coarsen',source,'--kernel',kernel,'--block-size',block_size,'--shared-memory-bytes',shared_memory_bytes,'--target',target,
+                  '--ssa-regions='+str(ssa_regions).lower(),'--scalar-math='+str(scalar_math).lower(),'-o',transformed]
             if rename:args+=['--rename',rename]
             try:
                 result=subprocess.run(list(map(str,args)),capture_output=True,text=True,timeout=180)
@@ -65,7 +66,8 @@ def compile_kernel(source,kernel,output,block_size=32,target='x86_64-linux-gnu',
                 record.update(input=str(source),input_sha256=sha(source),output=str(output),output_sha256=sha(transformed),
                     target=target,upstream_commit='ee05a48d79cbae11351e9c8eb711f286c1206402',
                     pass_binary_sha256=binary_identity,compiler_sources=source_identity,runtime='common/cpu-coarsening/runtime/cpu_runtime.cpp',
-                    shared_memory_bytes=shared_memory_bytes,fallback='none',validation='LLVM verification only; numerical acceptance is workload-specific')
+                    shared_memory_bytes=shared_memory_bytes,ssa_regions=ssa_regions,scalar_math=scalar_math,
+                    fallback='none',validation='LLVM verification only; numerical acceptance is workload-specific')
                 if obj:
                     obj=Path(obj).resolve()
                     if obj==source or obj==output:raise ValueError('Object path must differ from IR paths')
@@ -88,8 +90,10 @@ def main():
     p.add_argument('-o','--output',required=True);p.add_argument('--object');p.add_argument('--rename');p.add_argument('--block-size',type=int,default=32)
     p.add_argument('--target',choices=['x86_64-linux-gnu','aarch64-linux-gnu'],default='x86_64-linux-gnu')
     p.add_argument('--shared-memory-bytes',type=int,default=32768)
+    p.add_argument('--ssa-regions',action=argparse.BooleanOptionalAction,default=True)
+    p.add_argument('--scalar-math',action=argparse.BooleanOptionalAction,default=True)
     a=p.parse_args()
-    try:r=compile_kernel(a.input,a.kernel,a.output,a.block_size,a.target,a.rename,a.object,a.shared_memory_bytes)
+    try:r=compile_kernel(a.input,a.kernel,a.output,a.block_size,a.target,a.rename,a.object,a.shared_memory_bytes,a.ssa_regions,a.scalar_math)
     except Exception as e:p.exit(2,'RECOGNISES-DOES-NOT-ADMIT: '+str(e)+'\n')
     print(json.dumps(r))
 if __name__=='__main__':main()

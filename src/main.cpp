@@ -3,6 +3,7 @@
 #include "insert_sync.h"
 #include "handle_sync.h"
 #include "insert_warp_loop.h"
+#include "region_schedule.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -30,6 +31,8 @@ static cl::opt<std::string> Target("target",cl::init("x86_64-linux-gnu"));
 static cl::opt<std::string> Dump("dump-prefix",cl::init(""));
 static cl::opt<unsigned> BlockSize("block-size",cl::init(32));
 static cl::opt<unsigned> SharedBytes("shared-memory-bytes",cl::init(32768));
+static cl::opt<bool> SSARegions("ssa-regions",cl::init(true));
+static cl::opt<bool> ScalarMath("scalar-math",cl::init(true));
 static void refuse(const Twine& S){throw std::runtime_error(S.str());}
 static GlobalVariable* global(Module& M,StringRef N,Type* T) {
   if(auto* G=M.getNamedGlobal(N))return G;
@@ -527,12 +530,20 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
   if(returns.size()>1){auto* Exit=BasicBlock::Create(C,"cpu.kernel.exit",F);ReturnInst::Create(C,Exit);
     for(auto* R:returns){BranchInst::Create(Exit,R);R->eraseFromParent();}}
   prepareGlobals(*M);normalizeRegisters(*M,*F);simplifyScalarIR(*F);
+  unsigned scalarMathSites=ScalarMath?cpu_schedule::lowerScalarMath(*F):0;
+  auto schedule=cpu_schedule::analyze(*F);
+  bool wholeLane=SSARegions&&schedule.kind==cpu_schedule::Kind::WholeLane;
+  bool privateMemory=false,sharedMemory=false;
+  if(wholeLane){
+    cpu_schedule::emitWholeLane(*F,BlockSize);
+    dump(*M,".normalized");dump(*M,".regions");dump(*M,".collapsed");
+  }else{
   // CuPBoP's init_block also demotes PHIs before region discovery. Keep that
   // prerequisite while using LLVM's edge-correct utility.
   std::vector<PHINode*> phis;for(auto& I:instructions(F))if(auto* P=dyn_cast<PHINode>(&I))phis.push_back(P);
   for(auto* P:phis)DemotePHIToStack(P);
-  bool privateMemory=normalizePrivateMemory(*M,*F);
-  bool sharedMemory=normalizeSharedMemory(*M,*F)||F->hasFnAttribute("cpu.generic.shared.pointer");
+  privateMemory=normalizePrivateMemory(*M,*F);
+  sharedMemory=normalizeSharedMemory(*M,*F)||F->hasFnAttribute("cpu.generic.shared.pointer");
   lowerCollectives(*M,*F);rematerializeLogicalIndices(*M,*F);
   // Isolate synchronization sites before static predication so every value
   // crossing a masked phase is preserved as lane-private state.
@@ -553,6 +564,8 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
   insert_sync(M.get());preserve_cpu_barrier_free_branches(*F);split_block_by_sync(M.get());normalize_cpu_barrier_forks(*F);normalize_cpu_barrier_joins(*F);dump(*M,".regions");
   for(auto& I:instructions(*F))I.setMetadata("cpu.lane.value",MDNode::get(C,{}));
   insert_warp_loop(M.get());dump(*M,".collapsed");
+  F->addFnAttr("cpu.region.schedule","phased");
+  }
   if(privateMemory){IRBuilder<> B(&*F->getEntryBlock().getFirstInsertionPt());
     B.CreateCall(M->getOrInsertFunction("cpu_prepare_local_memory",B.getVoidTy(),B.getInt64Ty()),{B.getInt64(uint64_t(BlockSize)*32768)});}
   if(sharedMemory){IRBuilder<> B(&*F->getEntryBlock().getFirstInsertionPt());
@@ -561,5 +574,8 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
   if(!Rename.empty())F->setName(Rename);
   F->removeFnAttr("cpu.coarsen.kernel");F->addFnAttr("cpu.coarsened","cupbop-vortex");F->addFnAttr("cpu.block_size",std::to_string(BlockSize));
   std::error_code E;raw_fd_ostream O(Output,E);if(E)refuse(E.message());M->print(O,nullptr);
-  outs()<<"{\"status\":\"ADMITS\",\"kernel\":\""<<F->getName()<<"\",\"block_size\":"<<BlockSize<<",\"mapping\":\"block-to-worker\"}\n";return 0;
+  outs()<<"{\"status\":\"ADMITS\",\"kernel\":\""<<F->getName()<<"\",\"block_size\":"<<BlockSize
+        <<",\"mapping\":\"block-to-worker\",\"region_schedule\":\""<<(wholeLane?"whole-lane-ssa":"phased")
+        <<"\",\"schedule_reason\":\""<<(SSARegions?schedule.reason:"legacy schedule explicitly selected")
+        <<"\",\"scalar_math_sites\":"<<scalarMathSites<<"}\n";return 0;
  }catch(const std::exception& E){errs()<<"RECOGNISES-DOES-NOT-ADMIT: "<<E.what()<<"\n";return 2;}}

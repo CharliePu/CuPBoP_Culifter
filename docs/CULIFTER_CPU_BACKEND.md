@@ -34,6 +34,18 @@ Replace `INPUT` with the lifted LLVM IR path, `ENTRY` with its selected kernel s
 
 The pipeline acquires `/tmp/culifter-benchmark.lock` for its work and refuses another task's lock; it can reuse a lock owned by an ancestor process. Direct `bash build.sh` does not acquire this lock. Coordinate standalone builds and CPU validation accordingly.
 
+## Region scheduling and scalar-math controls
+
+The incremental [region planner](../src/region_schedule.cpp) analyzes normalized IR before PHI demotion and lane-storage lowering. An eligible single uninterrupted lane region keeps its SSA values and nested-loop PHIs, executing complete lanes sequentially in their original order. It snapshots immutable CTA launch values and statically bounded direct constant-bank loads once per CTA. Pointers loaded from that bank remain pointers; data reached through them is not snapshotted or assumed immutable.
+
+Communication, source allocations, memory-ordering operations, storage requiring ownership lowering and unmodeled helpers retain the established phased path, subject to its existing admission checks. This first separation of scheduling analysis from storage lowering does not implement generalized grid scheduling or a complete rewrite of live state across multiple regions. Physical CTA workers, the host ABI and existing harnesses remain unchanged.
+
+The scalar-math path replaces the registered `rsqrt_f32` call with FP32 `llvm.sqrt` followed by division of 1 by the result. It retains the established CPU wrapper's FP32 sqrt/div value sequence and the caller's source rescaling, with no promise of C `errno` behavior. It introduces no fast math, approximate instructions or reassociation. Other scalar helpers retain their existing contracts.
+
+Both features are enabled by default. For independent ablations, `pipeline.py --no-ssa-regions` selects the legacy phased schedule and `--no-scalar-math` retains the scalar runtime helper. Use both for the legacy control; use either separately to isolate the changes. The manifest records `region_schedule`, `schedule_reason`, `scalar_math_sites` and both option values.
+
+The eleven-workload regression passes 44 legacy/new checks at one/four workers, with bitwise agreement against legacy and historical outputs. BatchNorm and depthwise convolution use the SSA path; nine workloads retain phased lowering. Focused checks pass 36 semantic executions, seven refusals, eight mixed-scope executions, two tensor cases, 32,768 scalar bit patterns including special values, 12 memory/snapshot cases and four coordinate cases; final compiler IR matches all eleven validated candidates. In the matched four-worker Intel BatchNorm comparison, the combined path takes 128.712447 µs versus legacy 471.003367 µs and oneDNN 20.636416 µs: 3.659× faster than legacy but 6.237× slower than native. Scalar lowering alone regresses; most of the observed gain comes from the structural change. These finite checks do not establish general numerical equivalence or optimal scheduling.
+
 ## Host runtime contract
 
 The selected kernel must have a zero-argument entry; CuLifter parameters are supplied through its constant-memory ABI. Link the emitted object with [cpu_runtime.cpp](../runtime/cpu_runtime.cpp) and a workload-specific host harness, for example:
