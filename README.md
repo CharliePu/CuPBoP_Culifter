@@ -1,3 +1,5 @@
+> For CuLifter lifted-LLVM CPU serialization, see the [CuLifter CPU backend guide](docs/CULIFTER_CPU_BACKEND.md). The upstream Vortex guide follows.
+
 # CuPBoP: Cuda for Parallelized and Broad-range Processors
 
   

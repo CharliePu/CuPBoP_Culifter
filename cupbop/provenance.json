@@ -1,0 +1,51 @@
+{
+  "repository": "https://github.com/cupbop/CuPBoP_Vortex",
+  "commit": "ee05a48d79cbae11351e9c8eb711f286c1206402",
+  "files": [
+    {
+      "source": "compilation/KernelTranslation/include/insert_warp_loop.h",
+      "upstream_sha256": "0379035fd0dbe6c782866bc506507591fca3ff2fe4c2bd2f13bef94dcb63c59d",
+      "local": "cupbop/include/insert_warp_loop.h"
+    },
+    {
+      "source": "compilation/KernelTranslation/include/insert_sync.h",
+      "upstream_sha256": "5ef568fc4e875280b89b0b3916a22ff1576a7d7432c4766a94e54e9ad0ebaaf1",
+      "local": "cupbop/include/insert_sync.h"
+    },
+    {
+      "source": "compilation/KernelTranslation/include/handle_sync.h",
+      "upstream_sha256": "ff718447028945c5567b5875ac8a5dbc8346dbb2cc658cb29324cec97552af8d",
+      "local": "cupbop/include/handle_sync.h"
+    },
+    {
+      "source": "compilation/KernelTranslation/include/cg_sync.h",
+      "upstream_sha256": "470b58852ace288af0838a892f0e5f8f0ae53253d91555cef48d2548688e09fe",
+      "local": "cupbop/include/cg_sync.h"
+    },
+    {
+      "source": "compilation/KernelTranslation/include/tool.h",
+      "upstream_sha256": "d508ea384e8846c13bc8ce7adf0995c697d357a82c28290216630df2eef9cff8",
+      "local": "cupbop/include/tool.h"
+    },
+    {
+      "source": "compilation/KernelTranslation/src/insert_warp_loop.cpp",
+      "upstream_sha256": "5415c8e663df142746fee7c1cc026ce00fcca049fa3831f2b4316d031cde3fb2",
+      "local": "cupbop/src/insert_warp_loop.cpp"
+    },
+    {
+      "source": "compilation/KernelTranslation/src/insert_sync.cpp",
+      "upstream_sha256": "610cb82ef3b719a6186610268f0c61a8472c6009b7f9cd3388b6fb58a501a9a6",
+      "local": "cupbop/src/insert_sync.cpp"
+    },
+    {
+      "source": "compilation/KernelTranslation/src/handle_sync.cpp",
+      "upstream_sha256": "094ebe723e148f653d58444541f51b9ed91bc4e7e31104493a11ed59c1d393cd",
+      "local": "cupbop/src/handle_sync.cpp"
+    },
+    {
+      "source": "compilation/KernelTranslation/src/cg_sync.cpp",
+      "upstream_sha256": "970e4723aeb10e747a140146dfaa9ccec004a29448ca7495070b36c722b9740c",
+      "local": "cupbop/src/cg_sync.cpp"
+    }
+  ]
+}

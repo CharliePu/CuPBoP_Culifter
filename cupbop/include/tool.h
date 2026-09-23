@@ -1,0 +1,51 @@
+// Derived from CuPBoP_Vortex ee05a48d79cbae11351e9c8eb711f286c1206402; see ../LICENSE and provenance.json.
+#ifndef __NVVM2x86_TOOL__
+#define __NVVM2x86_TOOL__
+
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Module.h"
+#include <cstdlib>
+// CPU ownership: each invocation handles one active block.
+inline bool cupbop_cpu_per_block_context() { return true; }
+
+inline bool cupbop_debug() {
+  static bool enabled = (std::getenv("CUPBOP_DEBUG") != nullptr);
+  return enabled;
+}
+llvm::Module *LoadModuleFromFilr(char *file_name);
+void DumpModule(llvm::Module *M, char *file_name);
+bool isKernelFunction(llvm::Module *M, llvm::Function *F);
+void replace_block(llvm::Function *F, llvm::BasicBlock *before,
+                   llvm::BasicBlock *after);
+llvm::CallInst *CreateInterWarpBarrier(llvm::Instruction *InsertBefore);
+llvm::CallInst *CreateIntraWarpBarrier(llvm::Instruction *InsertBefore);
+void VerifyModule(llvm::Module *);
+void phi2alloc(llvm::Module *M);
+void remove_cuda_built_in(llvm::Module *M);
+void replace_built_in_function(llvm::Module *M);
+void replace_warp_shfl_early(llvm::Module *M);
+void lower_cmpxchg_for_flat(llvm::Module *M);
+void lower_atomicrmw_fadd(llvm::Module *M);
+void lower_atomicrmw_add_i64(llvm::Module *M);
+void replace_asm_call(llvm::Module *M);
+bool find_block_barrier_in_region(llvm::BasicBlock *start,
+                                  llvm::BasicBlock *end);
+bool find_barrier_in_region(llvm::BasicBlock *start, llvm::BasicBlock *end);
+bool has_warp_barrier(llvm::BasicBlock *B);
+bool has_barrier(llvm::BasicBlock *B);
+bool has_block_barrier(llvm::BasicBlock *B);
+bool has_barrier(llvm::Function *F);
+void replace_dynamic_shared_memory(llvm::Module *M);
+llvm::LoadInst *createLoad(llvm::IRBuilder<> &B, llvm::Value *addr,
+                           bool isVolatile = false);
+llvm::Value *createInBoundsGEP(llvm::IRBuilder<> &B, llvm::Value *ptr,
+                               llvm::ArrayRef<llvm::Value *> idxlist);
+llvm::Value *createGEP(llvm::IRBuilder<> &B, llvm::Value *ptr,
+                       llvm::ArrayRef<llvm::Value *> idxlist);
+void printIR(llvm::Module *module_);
+bool triton_cupbop_enabled();
+void replace_wmma_intrinsics(llvm::Module *M);
+void replace_nvvm_wmma_intrinsics(llvm::Module *M);
+void replace_cp_async_with_dxa(llvm::Module *M);
+#endif
