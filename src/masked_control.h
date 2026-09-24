@@ -79,17 +79,11 @@ static bool run(llvm::Module& M,llvm::Function& F) {
   }
   if(!phases||!conditional)return false;
   removeUnreachableBlocks(F);
-  // A source instruction boundary is not a scheduling boundary. Keeping
-  // straight-line blocks separate would give each one a pending mask and
-  // spill values merely because their definition/use have different block
-  // labels. Coalesce before assigning masks or demoting crossing values.
-  // Never merge across a collective/order cut: values spanning those cuts
-  // still require lane-private storage during phase execution.
-  auto hasCut=[](BasicBlock* B) {
-    for(auto& I:*B)
-      if(phaseSynchronization(I)||I.getMetadata("cpu.warp.memory.order"))return true;
-    return false;
-  };
+  // Reachability changes at branches and joins, not at synchronization.
+  // Coalesce unconditional chains before assigning pending masks, including
+  // the artificial blocks introduced by split_block_by_sync. Every cut stays
+  // in instruction order and flush() below still emits a separate phase.
+  // Cross-cut value lifetimes are handled independently of control regions.
   unsigned coalesced=0;
   bool changed;
   do {
@@ -97,7 +91,7 @@ static bool run(llvm::Module& M,llvm::Function& F) {
     for(auto It=F.begin();It!=F.end();) {
       auto* B=&*It++;
       auto* P=B->getSinglePredecessor();
-      if(!P||P==B||hasCut(P)||hasCut(B))continue;
+      if(!P||P==B)continue;
       auto* Br=dyn_cast<BranchInst>(P->getTerminator());
       if(!Br||!Br->isUnconditional())continue;
       if(MergeBlockIntoPredecessor(B)){++coalesced;changed=true;}
@@ -110,14 +104,27 @@ static bool run(llvm::Module& M,llvm::Function& F) {
   auto plan=schedule(F,LI,nullptr);
   std::vector<BasicBlock*> original;
   for(auto& B:F)original.push_back(&B);
-  // Moving a source block under its own mask invalidates cross-block SSA
-  // dominance. Preserve values in lane-private slots before restructuring.
+  // Moving source segments under guards invalidates SSA dominance across
+  // both control regions and synchronization cuts within a region. Assign
+  // segment identities before inserting spills: a unique reachability mask
+  // does not make values live across a barrier uniform or lane-independent.
+  std::map<Instruction*,unsigned> segments;
+  unsigned segment=0;
+  for(auto& B:F) {
+    ++segment;
+    for(auto& I:B) {
+      segments[&I]=segment;
+      if(phaseSynchronization(I))++segment;
+    }
+  }
   std::vector<Instruction*> crossing;
   for(auto& I:instructions(F)) {
     if(isa<AllocaInst>(&I)||I.isTerminator()||I.getType()->isVoidTy())continue;
     for(auto* U:I.users())if(auto* UI=dyn_cast<Instruction>(U))
-      if(UI->getParent()!=I.getParent()){crossing.push_back(&I);break;}
+      if(segments.at(UI)!=segments.at(&I)){crossing.push_back(&I);break;}
   }
+  F.addFnAttr("cpu.mask.control.regions",std::to_string(original.size()));
+  F.addFnAttr("cpu.mask.phase.spills",std::to_string(crossing.size()));
   for(auto* I:crossing)DemoteRegToStack(*I,false);
   auto& C=M.getContext();
   auto* Entry=BasicBlock::Create(C,"cpu.mask.entry",&F,&F.getEntryBlock());
