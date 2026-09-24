@@ -79,6 +79,33 @@ static bool run(llvm::Module& M,llvm::Function& F) {
   }
   if(!phases||!conditional)return false;
   removeUnreachableBlocks(F);
+  // A source instruction boundary is not a scheduling boundary. Keeping
+  // straight-line blocks separate would give each one a pending mask and
+  // spill values merely because their definition/use have different block
+  // labels. Coalesce before assigning masks or demoting crossing values.
+  // Never merge across a collective/order cut: values spanning those cuts
+  // still require lane-private storage during phase execution.
+  auto hasCut=[](BasicBlock* B) {
+    for(auto& I:*B)
+      if(phaseSynchronization(I)||I.getMetadata("cpu.warp.memory.order"))return true;
+    return false;
+  };
+  unsigned coalesced=0;
+  bool changed;
+  do {
+    changed=false;
+    for(auto It=F.begin();It!=F.end();) {
+      auto* B=&*It++;
+      auto* P=B->getSinglePredecessor();
+      if(!P||P==B||hasCut(P)||hasCut(B))continue;
+      auto* Br=dyn_cast<BranchInst>(P->getTerminator());
+      if(!Br||!Br->isUnconditional())continue;
+      if(MergeBlockIntoPredecessor(B)){++coalesced;changed=true;}
+    }
+  } while(changed);
+  F.addFnAttr("cpu.mask.coalesced.blocks",std::to_string(coalesced));
+  // Recompute analyses after coalescing; joins, backedges and synchronization
+  // remain explicit and are handled by the same reducible-CFG scheduler.
   DominatorTree DT(F);LoopInfo LI(DT);
   auto plan=schedule(F,LI,nullptr);
   std::vector<BasicBlock*> original;
