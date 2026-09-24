@@ -6,6 +6,7 @@
 #include "region_schedule.h"
 #include "readonly_loops.h"
 #include "wide_integer.h"
+#include "lane_loops.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -37,6 +38,10 @@ static cl::opt<bool> SSARegions("ssa-regions",cl::init(true));
 static cl::opt<bool> ScalarMath("scalar-math",cl::init(true));
 static cl::opt<bool> WideIntegers("wide-integers",cl::init(true));
 static cl::opt<bool> ReadOnlyLoops("readonly-loops",cl::init(true));
+static cl::opt<bool> LaneIndexSSA("lane-index-ssa",cl::init(true));
+static cl::opt<bool> ParallelLanes("parallel-lanes",cl::init(true));
+static cl::opt<bool> ForceLaneVectorize("force-lane-vectorize",cl::init(false));
+static cl::opt<bool> ByteLaneMasks("byte-lane-masks",cl::init(true));
 static void refuse(const Twine& S){throw std::runtime_error(S.str());}
 static GlobalVariable* global(Module& M,StringRef N,Type* T) {
   if(auto* G=M.getNamedGlobal(N))return G;
@@ -601,6 +606,11 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
     B.CreateCall(M->getOrInsertFunction("cpu_prepare_local_memory",B.getVoidTy(),B.getInt64Ty()),{B.getInt64(uint64_t(BlockSize)*32768)});}
   if(sharedMemory){IRBuilder<> B(&*F->getEntryBlock().getFirstInsertionPt());
     B.CreateCall(M->getOrInsertFunction("cpu_prepare_shared_memory",B.getVoidTy(),B.getInt64Ty()),{B.getInt64(SharedBytes)});}
+  // Lane loops: SSA lane/warp indices, then a structurally proved (or
+  // removed) parallel-access proposal for the loop vectorizer.
+  auto laneIndices=LaneIndexSSA?cpu_schedule::localizeLaneIndices(*F):cpu_schedule::LaneIndices{};
+  unsigned byteLaneMasks=ByteLaneMasks?cpu_schedule::widenLaneMasks(*F):0;
+  auto parallelLanes=cpu_schedule::annotateParallelLaneLoops(*F,laneIndices,ParallelLanes,ForceLaneVectorize);
   postAudit(*M,*F);
   if(!Rename.empty())F->setName(Rename);
   F->removeFnAttr("cpu.coarsen.kernel");F->addFnAttr("cpu.coarsened","cupbop-vortex");F->addFnAttr("cpu.block_size",std::to_string(BlockSize));
@@ -610,5 +620,10 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
         <<"\",\"schedule_reason\":\""<<(SSARegions?schedule.reason:"legacy schedule explicitly selected")
         <<"\",\"scalar_math_sites\":"<<scalarMathSites
         <<",\"readonly_loop_regions\":"<<readOnlyLoopRegions
-        <<",\"wide_integer_sites\":"<<wideIntegerSites<<"}\n";return 0;
+        <<",\"wide_integer_sites\":"<<wideIntegerSites
+        <<",\"local_lane_indices\":"<<laneIndices.count()
+        <<",\"byte_lane_masks\":"<<byteLaneMasks
+        <<",\"lane_loops\":"<<parallelLanes.laneLoops
+        <<",\"parallel_lane_loops\":"<<parallelLanes.asserted
+        <<",\"forced_vectorize_lane_loops\":"<<parallelLanes.forced<<"}\n";return 0;
  }catch(const std::exception& E){errs()<<"RECOGNISES-DOES-NOT-ADMIT: "<<E.what()<<"\n";return 2;}}

@@ -1910,6 +1910,10 @@ void add_warp_loop(std::vector<ParallelRegion> parallel_regions,
     MDNode *Dummy =
         MDNode::getTemporary(context, ArrayRef<Metadata *>()).release();
     MDNode *AccessGroupMD = MDNode::getDistinct(context, {});
+    // A proposal only: src/lane_loops.cpp keeps it, and tags the loop's
+    // accesses with !llvm.access.group, only where it proves that no memory
+    // dependence crosses lanes. (The former !llvm.mem.parallel_loop_access
+    // tags named this access group rather than a loop ID and had no effect.)
     MDNode *ParallelAccessMD = MDNode::get(
         context,
         {MDString::get(context, "llvm.loop.parallel_accesses"), AccessGroupMD});
@@ -1926,21 +1930,6 @@ void add_warp_loop(std::vector<ParallelRegion> parallel_regions,
     // We now have
     //   !1 = metadata !{metadata !1} <- self-referential root
     loop_cond->getTerminator()->setMetadata("llvm.loop", Root);
-
-    for (auto bb : region.wrapped_block) {
-      for (BasicBlock::iterator ii = bb->begin(), ee = bb->end(); ii != ee;
-           ii++) {
-        if (!ii->mayReadOrWriteMemory()) {
-          continue;
-        }
-        MDNode *NewMD = MDNode::get(bb->getContext(), AccessGroupMD);
-        MDNode *OldMD = ii->getMetadata("llvm.mem.parallel_loop_access");
-        if (OldMD != nullptr) {
-          NewMD = llvm::MDNode::concatenate(OldMD, NewMD);
-        }
-        ii->setMetadata("llvm.mem.parallel_loop_access", NewMD);
-      }
-    }
   }
 }
 
