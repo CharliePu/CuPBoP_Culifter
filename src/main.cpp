@@ -4,6 +4,7 @@
 #include "handle_sync.h"
 #include "insert_warp_loop.h"
 #include "region_schedule.h"
+#include "wide_integer.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -33,6 +34,7 @@ static cl::opt<unsigned> BlockSize("block-size",cl::init(32));
 static cl::opt<unsigned> SharedBytes("shared-memory-bytes",cl::init(32768));
 static cl::opt<bool> SSARegions("ssa-regions",cl::init(true));
 static cl::opt<bool> ScalarMath("scalar-math",cl::init(true));
+static cl::opt<bool> WideIntegers("wide-integers",cl::init(true));
 static void refuse(const Twine& S){throw std::runtime_error(S.str());}
 static GlobalVariable* global(Module& M,StringRef N,Type* T) {
   if(auto* G=M.getNamedGlobal(N))return G;
@@ -529,7 +531,14 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
   if(!F->getReturnType()->isVoidTy())refuse("kernel must return void");
   if(returns.size()>1){auto* Exit=BasicBlock::Create(C,"cpu.kernel.exit",F);ReturnInst::Create(C,Exit);
     for(auto* R:returns){BranchInst::Create(Exit,R);R->eraseFromParent();}}
-  prepareGlobals(*M);normalizeRegisters(*M,*F);simplifyScalarIR(*F);
+  prepareGlobals(*M);normalizeRegisters(*M,*F);
+  unsigned wideIntegerSites=WideIntegers?cpu_schedule::recoverWideIntegers(*F):0;
+  simplifyScalarIR(*F);
+  if(WideIntegers) for(unsigned round=0;round!=8;++round){
+    auto changed=cpu_schedule::recoverWideIntegers(*F);wideIntegerSites+=changed;
+    if(!changed)break;
+    simplifyScalarIR(*F);
+  }
   unsigned scalarMathSites=ScalarMath?cpu_schedule::lowerScalarMath(*F):0;
   auto schedule=cpu_schedule::analyze(*F);
   bool wholeLane=SSARegions&&schedule.kind==cpu_schedule::Kind::WholeLane;
@@ -577,5 +586,6 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
   outs()<<"{\"status\":\"ADMITS\",\"kernel\":\""<<F->getName()<<"\",\"block_size\":"<<BlockSize
         <<",\"mapping\":\"block-to-worker\",\"region_schedule\":\""<<(wholeLane?"whole-lane-ssa":"phased")
         <<"\",\"schedule_reason\":\""<<(SSARegions?schedule.reason:"legacy schedule explicitly selected")
-        <<"\",\"scalar_math_sites\":"<<scalarMathSites<<"}\n";return 0;
+        <<"\",\"scalar_math_sites\":"<<scalarMathSites
+        <<",\"wide_integer_sites\":"<<wideIntegerSites<<"}\n";return 0;
  }catch(const std::exception& E){errs()<<"RECOGNISES-DOES-NOT-ADMIT: "<<E.what()<<"\n";return 2;}}
