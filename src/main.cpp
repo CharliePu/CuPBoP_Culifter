@@ -4,6 +4,7 @@
 #include "handle_sync.h"
 #include "insert_warp_loop.h"
 #include "region_schedule.h"
+#include "readonly_loops.h"
 #include "wide_integer.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -35,6 +36,7 @@ static cl::opt<unsigned> SharedBytes("shared-memory-bytes",cl::init(32768));
 static cl::opt<bool> SSARegions("ssa-regions",cl::init(true));
 static cl::opt<bool> ScalarMath("scalar-math",cl::init(true));
 static cl::opt<bool> WideIntegers("wide-integers",cl::init(true));
+static cl::opt<bool> ReadOnlyLoops("readonly-loops",cl::init(true));
 static void refuse(const Twine& S){throw std::runtime_error(S.str());}
 static GlobalVariable* global(Module& M,StringRef N,Type* T) {
   if(auto* G=M.getNamedGlobal(N))return G;
@@ -335,6 +337,14 @@ static bool hasOperand(Value* V,GlobalVariable* G){
   if(auto* E=dyn_cast<ConstantExpr>(V))for(auto& O:E->operands())if(hasOperand(O,G))return true;
   return false;
 }
+static Instruction* operandInsertionPoint(Instruction* I,unsigned Operand){
+  // A PHI consumes each value on its incoming edge, not in its own block.
+  // Storage-address materialization must dominate that edge and must never
+  // split the block's PHI prefix. The generated TLS loads and address-only
+  // calculations are valid in the predecessor even on a critical edge.
+  if(auto* P=dyn_cast<PHINode>(I))return P->getIncomingBlock(Operand)->getTerminator();
+  return I;
+}
 static Value* privateOperand(Value* V,Instruction* Before,GlobalVariable* G,Module& M){
   if(V==G){IRBuilder<> B(Before);auto* Base=get(B,M,"cpu_local_memory");
     return B.CreateGEP(B.getInt8Ty(),Base,B.CreateMul(B.CreateZExt(tid(B,M),B.getInt64Ty()),B.getInt64(32768)),"cpu.private.base");}
@@ -351,7 +361,7 @@ static bool normalizePrivateMemory(Module& M,Function& F){
   std::vector<Instruction*> original;for(auto& I:instructions(F))original.push_back(&I);
   bool used=false;
   for(auto* I:original)for(unsigned k=0;k<I->getNumOperands();k++){
-    auto* V=I->getOperand(k);if(hasOperand(V,G)){used=true;I->setOperand(k,privateOperand(V,I,G,M));}
+    auto* V=I->getOperand(k);if(hasOperand(V,G)){used=true;I->setOperand(k,privateOperand(V,operandInsertionPoint(I,k),G,M));}
   }
   return used;
 }
@@ -365,7 +375,7 @@ static bool normalizeSharedMemory(Module& M,Function& F){
     return V;
   };
   std::vector<Instruction*> original;for(auto& I:instructions(F))original.push_back(&I);
-  for(auto* I:original)for(unsigned k=0;k<I->getNumOperands();++k)I->setOperand(k,replace(I->getOperand(k),I));
+  for(auto* I:original)for(unsigned k=0;k<I->getNumOperands();++k)I->setOperand(k,replace(I->getOperand(k),operandInsertionPoint(I,k)));
   return true;
 }
 static void postAudit(Module& M,Function& F){
@@ -543,16 +553,28 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
   auto schedule=cpu_schedule::analyze(*F);
   bool wholeLane=SSARegions&&schedule.kind==cpu_schedule::Kind::WholeLane;
   bool privateMemory=false,sharedMemory=false;
+  unsigned readOnlyLoopRegions=0;
   if(wholeLane){
     cpu_schedule::emitWholeLane(*F,BlockSize);
     dump(*M,".normalized");dump(*M,".regions");dump(*M,".collapsed");
   }else{
+  // Normalize storage ownership before outlining so generated lane helpers
+  // use the same CTA/shared and lane-private ABI as the surrounding kernel.
+  privateMemory=normalizePrivateMemory(*M,*F);
+  sharedMemory=normalizeSharedMemory(*M,*F)||F->hasFnAttribute("cpu.generic.shared.pointer");
+  // Only masked, communicating kernels have the per-iteration CTA schedule
+  // this transformation replaces. Do not add phase cuts to a source whose
+  // phased admission was caused only by allocations or runtime state.
+  bool communication=false;
+  for(auto& I:instructions(*F))if(auto* C=dyn_cast<CallInst>(&I))if(auto* CF=C->getCalledFunction()){
+    auto N=CF->getName();
+    communication|=cpu_masks::phaseSynchronization(I)||shuffleName(N)||tensorName(N)||N.starts_with("barrier0_")||N=="region_sum";
+  }
+  if(ReadOnlyLoops&&communication)readOnlyLoopRegions=cpu_schedule::outlineReadOnlyLoops(*F);
   // CuPBoP's init_block also demotes PHIs before region discovery. Keep that
   // prerequisite while using LLVM's edge-correct utility.
   std::vector<PHINode*> phis;for(auto& I:instructions(F))if(auto* P=dyn_cast<PHINode>(&I))phis.push_back(P);
   for(auto* P:phis)DemotePHIToStack(P);
-  privateMemory=normalizePrivateMemory(*M,*F);
-  sharedMemory=normalizeSharedMemory(*M,*F)||F->hasFnAttribute("cpu.generic.shared.pointer");
   lowerCollectives(*M,*F);rematerializeLogicalIndices(*M,*F);
   // Isolate synchronization sites before static predication so every value
   // crossing a masked phase is preserved as lane-private state.
@@ -587,5 +609,6 @@ int main(int argc,char** argv){cl::ParseCommandLineOptions(argc,argv);try{
         <<",\"mapping\":\"block-to-worker\",\"region_schedule\":\""<<(wholeLane?"whole-lane-ssa":"phased")
         <<"\",\"schedule_reason\":\""<<(SSARegions?schedule.reason:"legacy schedule explicitly selected")
         <<"\",\"scalar_math_sites\":"<<scalarMathSites
+        <<",\"readonly_loop_regions\":"<<readOnlyLoopRegions
         <<",\"wide_integer_sites\":"<<wideIntegerSites<<"}\n";return 0;
  }catch(const std::exception& E){errs()<<"RECOGNISES-DOES-NOT-ADMIT: "<<E.what()<<"\n";return 2;}}
